@@ -42,6 +42,7 @@ static const int color_count = sizeof(colors) / sizeof(colors[0]);
 static const char *color_names[] = {"red", "green", "blue", "white", "yellow", "cyan", "magenta"};
 
 static int color_index = 0;
+static int g_setup_enabled = 0;
 static uint8_t brightness = 16;
 static uint8_t custom_r = 0;
 static uint8_t custom_g = 0;
@@ -66,6 +67,7 @@ static httpd_handle_t g_server = NULL;
 static esp_mqtt_client_handle_t g_mqtt = NULL;
 
 static int setup_mode_active(void) {
+    if (!g_setup_enabled) return 0;
     return g_ap_clients > 0 || xTaskGetTickCount() < g_web_until;
 }
 
@@ -100,6 +102,9 @@ static void load_config(void) {
     len = sizeof(g_cfg.mqtt_uri); nvs_get_str(h, "mqtt_uri", g_cfg.mqtt_uri, &len);
     len = sizeof(g_cfg.mqtt_user); nvs_get_str(h, "mqtt_user", g_cfg.mqtt_user, &len);
     len = sizeof(g_cfg.mqtt_pass); nvs_get_str(h, "mqtt_pass", g_cfg.mqtt_pass, &len);
+    uint8_t en = 0;
+    nvs_get_u8(h, "setup_enabled", &en);
+    g_setup_enabled = en ? 1 : 0;
     nvs_close(h);
     if (strlen(g_cfg.mqtt_uri) == 0) {
         strncpy(g_cfg.mqtt_uri, "mqtt://localhost:1883", sizeof(g_cfg.mqtt_uri) - 1);
@@ -114,9 +119,11 @@ static void save_config(const app_config_t *cfg) {
     nvs_set_str(h, "mqtt_uri", cfg->mqtt_uri);
     nvs_set_str(h, "mqtt_user", cfg->mqtt_user);
     nvs_set_str(h, "mqtt_pass", cfg->mqtt_pass);
+    nvs_set_u8(h, "setup_enabled", 0);
     nvs_commit(h);
     nvs_close(h);
     g_cfg = *cfg;
+    g_setup_enabled = 0;
 }
 
 static void url_decode(char *dst, const char *src, size_t dst_size) {
@@ -359,18 +366,22 @@ static void wifi_init(void) {
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &ip_event_handler, NULL));
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+    if (g_setup_enabled) {
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
 
-    wifi_config_t ap_config = {
-        .ap = {
-            .ssid = "NightLight-Setup",
-            .ssid_len = strlen("NightLight-Setup"),
-            .password = "",
-            .max_connection = 4,
-            .authmode = WIFI_AUTH_OPEN
-        },
-    };
-    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &ap_config));
+        wifi_config_t ap_config = {
+            .ap = {
+                .ssid = "NightLight-Setup",
+                .ssid_len = strlen("NightLight-Setup"),
+                .password = "",
+                .max_connection = 4,
+                .authmode = WIFI_AUTH_OPEN
+            },
+        };
+        ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &ap_config));
+    } else {
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    }
 
     if (strlen(g_cfg.ssid)) {
         ESP_LOGI(TAG, "STA SSID: %s (len=%d, pass len=%d)", g_cfg.ssid, (int)strlen(g_cfg.ssid), (int)strlen(g_cfg.pass));
@@ -525,6 +536,13 @@ static esp_err_t save_post_handler(httpd_req_t *req) {
     const char *resp = "Saved. Rebooting...";
     httpd_resp_send(req, resp, strlen(resp));
 
+    g_web_until = 0;
+    if (g_server) {
+        httpd_stop(g_server);
+        g_server = NULL;
+    }
+    esp_wifi_set_mode(WIFI_MODE_STA);
+
     xTaskCreate(restart_task, "restart_task", 2048, NULL, 5, NULL);
     return ESP_OK;
 }
@@ -544,6 +562,34 @@ static httpd_handle_t start_webserver(void) {
     return NULL;
 }
 
+static void enable_setup_mode(void) {
+    if (g_setup_enabled) {
+        if (!g_server) g_server = start_webserver();
+        g_web_until = xTaskGetTickCount() + pdMS_TO_TICKS(30000);
+        return;
+    }
+    g_setup_enabled = 1;
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, "setup_enabled", 1);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    esp_wifi_set_mode(WIFI_MODE_APSTA);
+    wifi_config_t ap_config = {
+        .ap = {
+            .ssid = "NightLight-Setup",
+            .ssid_len = strlen("NightLight-Setup"),
+            .password = "",
+            .max_connection = 4,
+            .authmode = WIFI_AUTH_OPEN
+        },
+    };
+    esp_wifi_set_config(ESP_IF_WIFI_AP, &ap_config);
+    if (!g_server) g_server = start_webserver();
+    g_web_until = xTaskGetTickCount() + pdMS_TO_TICKS(30000);
+}
+
 static void buttons_task(void *pvParameters) {
     gpio_config_t btn_conf = {
         .pin_bit_mask = (1ULL << BTN_COLOR_GPIO) |
@@ -559,6 +605,8 @@ static void buttons_task(void *pvParameters) {
     int last_color = 1;
     int last_up = 1;
     int last_down = 1;
+    TickType_t both_since = 0;
+    int both_tracking = 0;
 
     while (1) {
         int color = gpio_get_level(BTN_COLOR_GPIO);
@@ -571,14 +619,27 @@ static void buttons_task(void *pvParameters) {
             update_leds();
         }
 
-        if (last_up == 1 && up == 0) {
-            if (brightness < 31) brightness++;
+        if (last_up == 1 && up == 0 && down == 1) {
+            if (brightness + 4 > 31) brightness = 31; else brightness += 4;
             update_leds();
         }
 
-        if (last_down == 1 && down == 0) {
-            if (brightness > 0) brightness--;
+        if (last_down == 1 && down == 0 && up == 1) {
+            if (brightness < 4) brightness = 0; else brightness -= 4;
             update_leds();
+        }
+
+        if (up == 0 && down == 0) {
+            if (!both_tracking) {
+                both_tracking = 1;
+                both_since = xTaskGetTickCount();
+            } else if (!g_setup_enabled &&
+                       (xTaskGetTickCount() - both_since) >= pdMS_TO_TICKS(5000)) {
+                enable_setup_mode();
+                both_tracking = 0;
+            }
+        } else {
+            both_tracking = 0;
         }
 
         last_color = color;
@@ -627,5 +688,7 @@ void app_main(void) {
 
     wifi_init();
 
-    g_server = start_webserver();
+    if (g_setup_enabled) {
+        g_server = start_webserver();
+    }
 }
