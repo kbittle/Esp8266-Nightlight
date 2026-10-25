@@ -1,6 +1,6 @@
 # ESP8266 NightLight
 
-An ESP8266 RTOS SDK firmware project for an RGB LED nightlight built around SK9822 LEDs. On boot it initializes NVS, loads stored configuration, and brings up WiFi in simultaneous AP+STA mode. A SoftAP (`NightLight-Setup`, open) hosts a configuration web page at `http://192.168.4.1/` for entering WiFi and MQTT credentials. When a STA connection is configured and obtains an IP, an MQTT client connects and subscribes to control topics. Three buttons cycle color and adjust brightness (GPIO 12/13/14).
+An ESP8266 RTOS SDK firmware project for an RGB LED nightlight built around SK9822 LEDs. On boot it initializes NVS, loads stored configuration, and brings up WiFi in STA mode from stored credentials. Setup mode can be enabled on demand by holding the two brightness buttons (GPIO 13 and 14) for 5 seconds (or is restored if it was left enabled); it brings up a simultaneous SoftAP (`NightLight-Setup`, open) hosting a configuration web page at `http://192.168.4.1/` for entering WiFi and MQTT credentials. While setup mode is active the LED blinks red and normal output is paused; the web server stays alive while a client is connected or for 30 seconds after the last request. When a STA connection is configured and obtains an IP, an MQTT client connects and subscribes to control topics. Three buttons cycle color and adjust brightness (GPIO 12/13/14).
 
 ## Pinout
 
@@ -26,7 +26,7 @@ Flash with `make flash` (default port `/dev/ttyUSB0`). Full clean with `make cle
 
 ## Configuration
 
-Config is stored in NVS namespace `nightlight` with keys `wifi_ssid`, `wifi_pass`, `mqtt_uri`, `mqtt_user`, `mqtt_pass`. Submit via POST `/save` on the config page (device reboots after saving). Defaults to `mqtt://localhost:1883` when no MQTT URI is set.
+Config is stored in NVS namespace `nightlight` with keys `wifi_ssid`, `wifi_pass`, `mqtt_uri`, `mqtt_user`, `mqtt_pass`, and `setup_enabled`. The config page scans for nearby WiFi networks (showing SSID and RSSI), allows selecting one or entering an SSID manually, and collects the WiFi password, MQTT URI, MQTT username, and MQTT password. A network scan is also available via GET `/scan` (JSON). Submit via POST `/save` on the config page (device reboots after saving and clears setup mode). Defaults to `mqtt://localhost:1883` when no MQTT URI is set.
 
 ## MQTT topics
 

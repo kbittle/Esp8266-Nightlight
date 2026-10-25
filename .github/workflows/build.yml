@@ -1,0 +1,43 @@
+name: Build ESP8266 Night Light Firmware
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/kbittle/esp8266-build-env:latest
+
+    defaults:
+      run:
+        working-directory: esp-nightlight-project
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Build Firmware
+        shell: bash
+        run: |
+          # Allow Git to run commands on workspace files owned by host user
+          git config --global --add safe.directory "*"
+
+          # Build using GNU Mak
+          make -j$(nproc) CONFIG_SDK_PYTHON=python3
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp8266-firmware-binaries
+          path: |
+            esp-nightlight-project/build/*.bin
+            esp-nightlight-project/build/bootloader/bootloader.bin
+            esp-nightlight-project/build/partition_table/partition-table.bin
