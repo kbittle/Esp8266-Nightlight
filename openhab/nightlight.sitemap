@@ -1,0 +1,8 @@
+sitemap nightlight label="NightLight" {
+    Frame label="NightLight" {
+        Switch item=NightLight_Power
+        Slider item=NightLight_Brightness minValue=0 maxValue=31
+        Selection item=NightLight_Color mappings=["red"="Red","green"="Green","blue"="Blue","white"="White","yellow"="Yellow","cyan"="Cyan","magenta"="Magenta"]
+        Text item=NightLight_Availability
+    }
+}

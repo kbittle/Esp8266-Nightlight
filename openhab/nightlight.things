@@ -1,0 +1,27 @@
+Bridge mqtt:broker:nightlightBroker "NightLight MQTT Broker" [
+    host="localhost",
+    port=1883
+] {
+    Thing topic nightlight "ESP8266 NightLight" {
+        Channels:
+            Type switch : power "Power" [
+                commandTopic="nightlight/aabbccddeeff/power/command",
+                stateTopic="nightlight/aabbccddeeff/power/state",
+                on="on",
+                off="off"
+            ]
+            Type number : brightness "Brightness" [
+                commandTopic="nightlight/aabbccddeeff/brightness/command",
+                stateTopic="nightlight/aabbccddeeff/brightness/state",
+                min=0,
+                max=31
+            ]
+            Type string : color "Color" [
+                commandTopic="nightlight/aabbccddeeff/color/command",
+                stateTopic="nightlight/aabbccddeeff/color/state"
+            ]
+            Type string : availability "Availability" [
+                stateTopic="nightlight/aabbccddeeff/availability"
+            ]
+    }
+}

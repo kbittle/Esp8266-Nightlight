@@ -1,0 +1,4 @@
+Switch NightLight_Power "NightLight Power" { channel="mqtt:topic:nightlightBroker:nightlight:power" }
+Number NightLight_Brightness "NightLight Brightness" { channel="mqtt:topic:nightlightBroker:nightlight:brightness" }
+String NightLight_Color "NightLight Color" { channel="mqtt:topic:nightlightBroker:nightlight:color" }
+String NightLight_Availability "NightLight Availability" { channel="mqtt:topic:nightlightBroker:nightlight:availability" }
