@@ -30,18 +30,24 @@ Config is stored in NVS namespace `nightlight` with keys `wifi_ssid`, `wifi_pass
 
 ## MQTT topics
 
+Topics are scoped per device using the device MAC (lowercase, no colons) as `<id>`.
+
 | Topic | Direction | Description |
 | --- | --- | --- |
-| `nightlight/color` | subscribe | Set color by name, 0-6 index, or RGB code |
-| `nightlight/brightness` | subscribe | Set brightness 0-31 |
-| `nightlight/rgb` | subscribe | Set custom RGB color code |
-| `nightlight/status` | publish (retained) | JSON status on connect |
+| `nightlight/<id>/color/command` | subscribe | Set color by name, 0-6 index, or RGB code |
+| `nightlight/<id>/brightness/command` | subscribe | Set brightness 0-31 |
+| `nightlight/<id>/power/command` | subscribe | Turn light on/off |
+| `nightlight/<id>/color/state` | publish (retained) | Current color |
+| `nightlight/<id>/brightness/state` | publish (retained) | Current brightness |
+| `nightlight/<id>/power/state` | publish (retained) | `on`/`off` |
+| `nightlight/<id>/availability` | publish (retained, LWT) | `online`/`offline` |
+| `nightlight/<id>/info` | publish (retained) | JSON device info |
 
 ### Available commands
 
-Color (`nightlight/color`): payload may be a color name, numeric index (0-6), or RGB code.
+Color (`nightlight/<id>/color/command`): payload may be a color name, numeric index (0-6), or RGB code.
 
-RGB (`nightlight/rgb`): payload may be a hex code (`#FF0000`, `FF0000`) or comma/space separated values (`255,0,0`, `255 0 0`). Also accepted on `nightlight/color`.
+RGB: payload may be a hex code (`#FF0000`, `FF0000`) or comma/space separated values (`255,0,0`, `255 0 0`). Also accepted on the color command topic.
 
 | Name | Index | RGB |
 | --- | --- | --- |
@@ -53,10 +59,54 @@ RGB (`nightlight/rgb`): payload may be a hex code (`#FF0000`, `FF0000`) or comma
 | cyan | 5 | 0,255,255 |
 | magenta | 6 | 255,0,255 |
 
-Brightness (`nightlight/brightness`): integer 0-31.
+Brightness (`nightlight/<id>/brightness/command`): integer 0-31.
 
-Status payload (`nightlight/status`) example:
+Power (`nightlight/<id>/power/command`): `on`/`off`, `1`/`0`, or `true`/`false`. Turning on restores the current color/brightness.
 
+State topics publish the current value (`red`, `#FF0000`, or `16`). Availability publishes `online`/`offline` (retained, LWT).
+
+### Topic details
+
+- `<id>` is the device MAC address in lowercase hex with no colons (e.g. `aabbccddeeff`).
+- Command topics are subscribed; publish payloads to them to change state.
+- State topics are published retained on every change and on connect.
+- `availability` is retained with LWT `offline`; `online` is published on connect.
+- `info` is retained and republished on connect and every 60 seconds.
+
+### Example payloads
+
+Color command:
+```
+nightlight/aabbccddeeff/color/command  ->  red
+nightlight/aabbccddeeff/color/command  ->  3
+nightlight/aabbccddeeff/color/command  ->  #FF0000
+nightlight/aabbccddeeff/color/command  ->  255,0,0
+```
+
+Brightness command:
+```
+nightlight/aabbccddeeff/brightness/command  ->  16
+```
+
+Power command:
+```
+nightlight/aabbccddeeff/power/command  ->  off
+nightlight/aabbccddeeff/power/command  ->  on
+```
+
+State:
+```
+nightlight/aabbccddeeff/color/state        ->  red
+nightlight/aabbccddeeff/brightness/state   ->  16
+nightlight/aabbccddeeff/power/state        ->  on
+```
+
+Availability:
+```
+nightlight/aabbccddeeff/availability      ->  online
+```
+
+Info:
 ```json
-{"status":"online","version":"...","heap":12345,"color":"red","brightness":16,"mac":"aa:bb:cc:dd:ee:ff"}
+{"status":"online","version":"...","heap":12345,"uptime":3600,"rssi":-42,"ip":"192.168.1.42","mac":"aa:bb:cc:dd:ee:ff"}
 ```

@@ -19,7 +19,7 @@
 - SoftAP SSID `NightLight-Setup` (open), config page at `http://192.168.4.1/`.
 - STA connects only if `wifi_ssid` is stored; MQTT starts after STA gets IP using `mqtt_uri`.
 - Config saved via POST `/save` writes NVS keys (`wifi_ssid`, `wifi_pass`, `mqtt_uri`, `mqtt_user`, `mqtt_pass`) then reboots.
-- MQTT control topics: `nightlight/color` (color name, 0-6 index, or RGB code), `nightlight/brightness` (0-31), `nightlight/rgb` (RGB color code, e.g. `#FF0000` or `255,0,0`).
+- MQTT control topics: `nightlight/<id>/color/command` (color name, 0-6 index, or RGB code), `nightlight/<id>/brightness/command` (0-31), state `nightlight/<id>/color/state` and `nightlight/<id>/brightness/state`, availability `nightlight/<id>/availability` (LWT).
 
 ## Notes
 

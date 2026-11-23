@@ -42,6 +42,7 @@ static const int color_count = sizeof(colors) / sizeof(colors[0]);
 static const char *color_names[] = {"red", "green", "blue", "white", "yellow", "cyan", "magenta"};
 
 static int color_index = 0;
+static int power_on = 1;
 static int g_setup_enabled = 0;
 static uint8_t brightness = 16;
 static uint8_t custom_r = 0;
@@ -65,6 +66,12 @@ static app_config_t g_cfg;
 
 static httpd_handle_t g_server = NULL;
 static esp_mqtt_client_handle_t g_mqtt = NULL;
+static char g_device_id[13] = {0};
+static char g_lwt_topic[96] = {0};
+
+static void init_device_id(void);
+static void publish_state(esp_mqtt_client_handle_t client);
+static void publish_info(esp_mqtt_client_handle_t client);
 
 static int setup_mode_active(void) {
     if (!g_setup_enabled) return 0;
@@ -73,6 +80,10 @@ static int setup_mode_active(void) {
 
 static void update_leds(void) {
     if (setup_mode_active()) return;
+    if (!power_on) {
+        sk9822_set_color(0, 0, 0, 0);
+        return;
+    }
     if (custom_color) {
         sk9822_set_color(custom_r, custom_g, custom_b, brightness);
     } else {
@@ -224,32 +235,32 @@ static void set_rgb_color(uint8_t r, uint8_t g, uint8_t b) {
     update_leds();
 }
 
+static void init_device_id(void) {
+    if (g_device_id[0]) return;
+    uint8_t mac[6] = {0};
+    esp_base_mac_addr_get(mac);
+    snprintf(g_device_id, sizeof(g_device_id), "%02x%02x%02x%02x%02x%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED: {
             ESP_LOGI(TAG, "MQTT connected");
-            esp_mqtt_client_subscribe(event->client, "nightlight/color", 0);
-            esp_mqtt_client_subscribe(event->client, "nightlight/brightness", 0);
-            esp_mqtt_client_subscribe(event->client, "nightlight/rgb", 0);
+            init_device_id();
+            char topic[96];
+            snprintf(topic, sizeof(topic), "nightlight/%s/color/command", g_device_id);
+            esp_mqtt_client_subscribe(event->client, topic, 0);
+            snprintf(topic, sizeof(topic), "nightlight/%s/brightness/command", g_device_id);
+            esp_mqtt_client_subscribe(event->client, topic, 0);
+            snprintf(topic, sizeof(topic), "nightlight/%s/power/command", g_device_id);
+            esp_mqtt_client_subscribe(event->client, topic, 0);
 
-            uint8_t mac[6] = {0};
-            esp_base_mac_addr_get(mac);
-            char color_str[16];
-            if (custom_color) {
-                snprintf(color_str, sizeof(color_str), "#%02X%02X%02X", custom_r, custom_g, custom_b);
-            } else {
-                strncpy(color_str, color_names[color_index >= 0 && color_index < color_count ? color_index : 0], sizeof(color_str) - 1);
-                color_str[sizeof(color_str) - 1] = '\0';
-            }
-            char payload[256];
-            snprintf(payload, sizeof(payload),
-                "{\"status\":\"online\",\"version\":\"%s\",\"heap\":%u,\"color\":\"%s\",\"brightness\":%u,\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\"}",
-                esp_get_idf_version(), (unsigned)esp_get_free_heap_size(),
-                color_str,
-                (unsigned)brightness,
-                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-            esp_mqtt_client_publish(event->client, "nightlight/status", payload, 0, 0, 1);
+            snprintf(topic, sizeof(topic), "nightlight/%s/availability", g_device_id);
+            esp_mqtt_client_publish(event->client, topic, "online", 0, 0, 1);
+            publish_state(event->client);
+            publish_info(event->client);
             break;
         }
         case MQTT_EVENT_DISCONNECTED:
@@ -263,31 +274,48 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
             memcpy(topic, event->topic, tlen); topic[tlen] = '\0';
             memcpy(data, event->data, dlen); data[dlen] = '\0';
 
-            if (strcmp(topic, "nightlight/color") == 0) {
-                uint8_t r, g, b;
-                if (parse_rgb(data, &r, &g, &b) == 0) {
-                    set_rgb_color(r, g, b);
-                } else {
-                    int idx = color_index_from_name(data);
-                    if (idx < 0) idx = atoi(data);
-                    if (idx >= 0 && idx < color_count) {
-                        color_index = idx;
-                        custom_color = 0;
-                        update_leds();
+            init_device_id();
+            char base[64];
+            snprintf(base, sizeof(base), "nightlight/%s", g_device_id);
+            size_t base_len = strlen(base);
+            int handled = 0;
+            if (strncmp(topic, base, base_len) == 0) {
+                const char *suffix = topic + base_len;
+                if (strcmp(suffix, "/color/command") == 0) {
+                    handled = 1;
+                    uint8_t r, g, b;
+                    if (parse_rgb(data, &r, &g, &b) == 0) {
+                        set_rgb_color(r, g, b);
+                    } else {
+                        int idx = color_index_from_name(data);
+                        if (idx < 0) idx = atoi(data);
+                        if (idx >= 0 && idx < color_count) {
+                            color_index = idx;
+                            custom_color = 0;
+                            update_leds();
+                        }
                     }
+                    publish_state(event->client);
+                } else if (strcmp(suffix, "/brightness/command") == 0) {
+                    handled = 1;
+                    int b = atoi(data);
+                    if (b < 0) b = 0;
+                    if (b > 31) b = 31;
+                    brightness = (uint8_t)b;
+                    update_leds();
+                    publish_state(event->client);
+                } else if (strcmp(suffix, "/power/command") == 0) {
+                    handled = 1;
+                    if (strcasecmp(data, "on") == 0 || strcmp(data, "1") == 0 || strcasecmp(data, "true") == 0) {
+                        power_on = 1;
+                    } else if (strcasecmp(data, "off") == 0 || strcmp(data, "0") == 0 || strcasecmp(data, "false") == 0) {
+                        power_on = 0;
+                    }
+                    update_leds();
+                    publish_state(event->client);
                 }
-            } else if (strcmp(topic, "nightlight/rgb") == 0) {
-                uint8_t r, g, b;
-                if (parse_rgb(data, &r, &g, &b) == 0) {
-                    set_rgb_color(r, g, b);
-                }
-            } else if (strcmp(topic, "nightlight/brightness") == 0) {
-                int b = atoi(data);
-                if (b < 0) b = 0;
-                if (b > 31) b = 31;
-                brightness = (uint8_t)b;
-                update_leds();
             }
+            (void)handled;
             break;
         }
         case MQTT_EVENT_ERROR:
@@ -298,6 +326,55 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     }
 }
 
+static void publish_state(esp_mqtt_client_handle_t client) {
+    if (!client) client = g_mqtt;
+    if (!client) return;
+    init_device_id();
+    char color_str[16];
+    if (custom_color) {
+        snprintf(color_str, sizeof(color_str), "#%02X%02X%02X", custom_r, custom_g, custom_b);
+    } else {
+        strncpy(color_str, color_names[color_index >= 0 && color_index < color_count ? color_index : 0], sizeof(color_str) - 1);
+        color_str[sizeof(color_str) - 1] = '\0';
+    }
+    char topic[96];
+    snprintf(topic, sizeof(topic), "nightlight/%s/color/state", g_device_id);
+    esp_mqtt_client_publish(client, topic, color_str, 0, 0, 1);
+
+    char bbuf[8];
+    snprintf(bbuf, sizeof(bbuf), "%u", (unsigned)brightness);
+    snprintf(topic, sizeof(topic), "nightlight/%s/brightness/state", g_device_id);
+    esp_mqtt_client_publish(client, topic, bbuf, 0, 0, 1);
+
+    snprintf(topic, sizeof(topic), "nightlight/%s/power/state", g_device_id);
+    esp_mqtt_client_publish(client, topic, power_on ? "on" : "off", 0, 0, 1);
+}
+
+static void publish_info(esp_mqtt_client_handle_t client) {
+    if (!client) client = g_mqtt;
+    if (!client) return;
+    init_device_id();
+    uint8_t mac[6] = {0};
+    esp_base_mac_addr_get(mac);
+    char ip_str[16] = "0.0.0.0";
+    tcpip_adapter_ip_info_t ip_info;
+    if (tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info) == ESP_OK) {
+        snprintf(ip_str, sizeof(ip_str), "%s", ip4addr_ntoa(&ip_info.ip));
+    }
+    wifi_ap_record_t ap;
+    int rssi = 0;
+    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) rssi = ap.rssi;
+    unsigned uptime = (unsigned)(xTaskGetTickCount() / configTICK_RATE_HZ);
+    char topic[96];
+    snprintf(topic, sizeof(topic), "nightlight/%s/info", g_device_id);
+    char payload[384];
+    snprintf(payload, sizeof(payload),
+        "{\"status\":\"online\",\"version\":\"%s\",\"heap\":%u,\"uptime\":%u,\"rssi\":%d,\"ip\":\"%s\",\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\"}",
+        esp_get_idf_version(), (unsigned)esp_get_free_heap_size(), uptime, rssi, ip_str,
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    esp_mqtt_client_publish(client, topic, payload, 0, 0, 1);
+}
+
 static void mqtt_start(void) {
     if (strlen(g_cfg.mqtt_uri) == 0) return;
     if (g_mqtt) {
@@ -305,6 +382,8 @@ static void mqtt_start(void) {
         esp_mqtt_client_destroy(g_mqtt);
         g_mqtt = NULL;
     }
+    init_device_id();
+    snprintf(g_lwt_topic, sizeof(g_lwt_topic), "nightlight/%s/availability", g_device_id);
     char uri[192];
     if (strncmp(g_cfg.mqtt_uri, "mqtt://", 7) != 0 &&
         strncmp(g_cfg.mqtt_uri, "mqtts://", 8) != 0) {
@@ -317,6 +396,11 @@ static void mqtt_start(void) {
         .uri = uri,
         .username = g_cfg.mqtt_user,
         .password = g_cfg.mqtt_pass,
+        .lwt_topic = g_lwt_topic,
+        .lwt_msg = "offline",
+        .lwt_msg_len = 7,
+        .lwt_qos = 0,
+        .lwt_retain = 1,
     };
     g_mqtt = esp_mqtt_client_init(&mqtt_cfg);
     if (g_mqtt) {
@@ -617,16 +701,19 @@ static void buttons_task(void *pvParameters) {
             color_index = (color_index + 1) % color_count;
             custom_color = 0;
             update_leds();
+            publish_state(NULL);
         }
 
         if (last_up == 1 && up == 0 && down == 1) {
             if (brightness + 4 > 31) brightness = 31; else brightness += 4;
             update_leds();
+            publish_state(NULL);
         }
 
         if (last_down == 1 && down == 0 && up == 1) {
             if (brightness < 4) brightness = 0; else brightness -= 4;
             update_leds();
+            publish_state(NULL);
         }
 
         if (up == 0 && down == 0) {
@@ -676,6 +763,13 @@ static void led_blink_task(void *pvParameters) {
     }
 }
 
+static void info_task(void *pv) {
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(60000));
+        if (g_mqtt) publish_info(NULL);
+    }
+}
+
 void app_main(void) {
     sk9822_init();
     update_leds();
@@ -685,6 +779,7 @@ void app_main(void) {
 
     xTaskCreate(buttons_task, "buttons_task", 2048, NULL, 5, NULL);
     xTaskCreate(led_blink_task, "led_blink_task", 2048, NULL, 5, NULL);
+    xTaskCreate(info_task, "info_task", 2048, NULL, 5, NULL);
 
     wifi_init();
 
