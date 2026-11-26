@@ -1,7 +1,13 @@
 FROM ubuntu:22.04
 
+# Build-time git commit hash (passed via --build-arg)
+ARG GIT_COMMIT_HASH=unknown
+
 # Prevent interactive prompts during apt install
 ENV DEBIAN_FRONTEND=noninteractive
+
+# Store git hash as env var for runtime access
+ENV GIT_COMMIT_HASH=${GIT_COMMIT_HASH}
 
 # Install system dependencies (ADDED python-is-python3 HERE)
 RUN apt-get update && apt-get install -y --no-install-recommends \

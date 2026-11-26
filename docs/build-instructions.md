@@ -104,3 +104,14 @@ To build this:
 - Hit "Run workflow". 
 
 This will publish the built container to the users container registry. Update build.yml with the install path.
+
+# Locally building in docker container
+
+## Clean build (erase cached artifacts)
+`./esp-gateway-project/build-app.sh --clean`
+
+## Clean, build, and flash
+`./esp-gateway-project/build-app.sh --clean --flash /dev/ttyUSB0`
+
+## Other options still work
+`./esp-gateway-project/build-app.sh --erase-flash --flash /dev/ttyUSB0`

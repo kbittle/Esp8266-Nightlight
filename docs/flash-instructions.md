@@ -39,7 +39,7 @@ When you run make flash, Espressif's build system automatically checks all three
 
 ```bash
 # 1. Navigate to the project directory
-cd esp-gateway-project
+cd esp-nightlight-project
 
 # 2. Build the firmware binaries
 make -j$(nproc) CONFIG_SDK_PYTHON=python3
